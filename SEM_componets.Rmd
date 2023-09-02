@@ -1,0 +1,136 @@
+---
+title: "SEM Model Componets"
+output: html_notebook
+---
+
+Objective
+
+* take a hard look at the model components of SEM 
+* understand the dynamics and the sensitivity
+* what is my interpretation of what is going on... 
+
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+library(ggplot2)
+
+# This requires a local installation of the developmental version of the package
+SEM_root <- "~/Documents/2023/FoRTEII/SEM"
+devtools::load_all(SEM_root)
+inputs <- read.csv(file.path(SEM_root, "tests", "testthat", "inputs.csv"))
+
+```
+
+
+# arrhenius
+
+Physical chemistry is the formula for temperature dependency of reaction rates, in SEM it is used to 
+adjust the respiration/reaction rates that might have been observed in a lab to reflect the temperature
+at a particular time. 
+
+TODO might drop Rleaf as a parameter and just make it related to Vcmax... 
+
+```{r}
+lapply(0:100, FUN = arrhenius, observed.value = 0.04 * 18) %>% 
+  unlist -> 
+  out
+
+data.frame(temp = 0:100, rxn = out) %>% 
+  ggplot(aes(temp, rxn)) + 
+  geom_line() + 
+  labs(title = "Arrhenius", subtitle = "Using Photosynthesis params")
+
+```
+
+
+# Farquhar
+
+R <- 8.3144621 # this is the molar gas constant aka molar equivalent to the Boltzmann constant, expressed in units of energy per temperature increment per amount of substance
+
+ 
+```{r, echo = TRUE}
+# This is the molar gas constant aka molar equivalent to the Boltzmann constant,
+# expressed in units of energy per temperature increment per amount of substance
+R <- 8.3144621 # gas constant
+
+# Tleaf is around 25C in units of K which is the temp the basal respiration 
+# measurements are collected at. 
+Tleaf <- 298 # this is 25 C from K 
+
+Kc <- 404.9 * exp(79430 * (Tleaf - 298) / (298 * R * Tleaf)) # the min 
+Ko <- 278.4 * exp(36380 * (Tleaf - 298) / (298 * R * Tleaf)) # the max?? 
+Km <- Kc * (1 + 210 / Ko)
+```
+
+
+
+```{r}
+Vcmax <- 18
+Gstar <- 10 
+Ci <- 400
+
+Fparams <- c("alpha" = 0.8, "Jmax" = 1.67 * Vcmax, "Gstar" = Gstar, "Km" = Km, "Vcmax" = Vcmax)  
+I <- inputs$PAR
+
+# The internals of the farquhar function 
+a <- 0.9 ## curvature parameter
+# - (quatum yeild * PAR + max electron transport rate (assumed to be some related to mac carboxylation rate))
+b <- -(Fparams[["alpha"]] * I + Fparams[["Jmax"]]) # weird that this is max + yeild then neative... 
+  
+ggplot(data = data.frame(par = I, b = b), aes(par, b)) + 
+  geom_point() + 
+  labs(title = "PAR vs b")
+
+ggplot(data = data.frame(time = inputs$time, b = b), aes(time, b)) + 
+  geom_point() + 
+  labs(title = "Time vs b")
+
+# this seems more along the lines of what I would expect, its yeild * par * max... although that
+# a product of all three.... 
+  c <- Fparams[["alpha"]] * I * Fparams[["Jmax"]]
+  
+  ggplot(data = data.frame(time = inputs$time, c = c), aes(time, c)) + 
+  geom_point() + 
+  labs(title = "Time vs c")
+  
+  J <- (-b -sqrt(b^2-4*a*c))/ (2*a)
+  
+  aJ <- J*(Ci-Fparams[["Gstar"]])/(4*Ci+8*Fparams[["Gstar"]])    ## electron transport limited without covariates
+  aC <- Fparams[["Vcmax"]]*(Ci-Fparams[["Gstar"]])/(Ci + Fparams[["Km"]])  
+  
+  
+xx <- data.frame(time = inputs$time, par = inputs$PAR, aJ, aC)
+
+ggplot(data = xx) + 
+  geom_line(aes(par, aJ)) + 
+  geom_line(aes(par, aC))
+  
+  
+  out <- min(aJ, aC) - Fparams[["Rleaf"]]
+```
+ 
+
+* this tells use we cannot adjust the temporal resolution to be more than an a 1 hour time step!
+
+"The Farquhar biochemical growth model (Farquhar et al., 1980) calculates photosynthesis as a function of demand and supply of CO2. The advantage with this model is that photosynthesis is regulated not only by radiation and transpiration, but also by air humidity, leaf temperature, CO2 availability and leaf nitrogen content, and the plant also experience radiation saturation at high levels of radiation. To function properly, driving variables need to be given as input to the simulation at least once an hour."^[http://www.coupmodel.com/WordDocuments/farquharapproach1.htm]
+
+
+Within the SEM model this is called as part of the ballberry function.... 
+
+farquhar(Ci = Ci, Fparams = Fparams, I = obs[["PAR"]]) = net photosynthesis given on CO2 or PAR limited conditions... 
+(farquhar(Ci = Ci, Fparams = Fparams, I = obs[["PAR"]]) - input[1])
+
+```{r}
+#Jmax is also related to Vcmax! 
+# what is the differences betweeen obs and I? 
+Vcmax <- 18
+Gstar <- 10 
+Fparams <- c( 0.8, 1.67 * Vcmax, Gstar, 18, Vcmax*0.004, Km)
+names(Fparams) <- c("alpha", "Jmax", "Gstar", "Vcmax", "Rleaf", "Km")
+farquhar(Ci = 400, Fparams = Fparams, I = 10)
+
+
+
+```
+
+
+
