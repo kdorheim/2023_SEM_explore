@@ -1,13 +1,19 @@
 ---
 title: "SEM Model Componets"
-output: html_notebook
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
 ---
 
-Objective
+## Set Up & Objective 
 
 * take a hard look at the model components of SEM 
 * understand the dynamics and the sensitivity
 * what is my interpretation of what is going on... 
+
 
 ```{r, warning=FALSE, message=FALSE}
 library(dplyr)
@@ -18,16 +24,16 @@ SEM_root <- "~/Documents/2023/FoRTEII/SEM"
 devtools::load_all(SEM_root)
 inputs <- read.csv(file.path(SEM_root, "tests", "testthat", "inputs.csv"))
 
+theme_set(theme_bw())
 ```
 
+# Componet Description
 
-# arrhenius
+# Arrhenius
 
 Physical chemistry is the formula for temperature dependency of reaction rates, in SEM it is used to 
 adjust the respiration/reaction rates that might have been observed in a lab to reflect the temperature
 at a particular time. 
-
-TODO might drop Rleaf as a parameter and just make it related to Vcmax... 
 
 ```{r}
 lapply(0:100, FUN = arrhenius, observed.value = 0.04 * 18) %>% 
@@ -44,9 +50,11 @@ data.frame(temp = 0:100, rxn = out) %>%
 
 # Farquhar
 
-R <- 8.3144621 # this is the molar gas constant aka molar equivalent to the Boltzmann constant, expressed in units of energy per temperature increment per amount of substance
 
- 
+"The Farquhar biochemical growth model (Farquhar et al., 1980) calculates photosynthesis as a function of demand and supply of CO2. The advantage with this model is that photosynthesis is regulated not only by radiation and transpiration, but also by air humidity, leaf temperature, CO2 availability and leaf nitrogen content, and the plant also experience radiation saturation at high levels of radiation. To function properly, driving variables need to be given as input to the simulation at least once an hour."^[http://www.coupmodel.com/WordDocuments/farquharapproach1.htm]
+
+**One of the assumptions is that module needs less than hourly data!**
+
 ```{r, echo = TRUE}
 # This is the molar gas constant aka molar equivalent to the Boltzmann constant,
 # expressed in units of energy per temperature increment per amount of substance
@@ -61,76 +69,74 @@ Ko <- 278.4 * exp(36380 * (Tleaf - 298) / (298 * R * Tleaf)) # the max??
 Km <- Kc * (1 + 210 / Ko)
 ```
 
+The photosynthesis rate is determined by if the system is light limited or CO2 limited. 
 
-
-```{r}
+```{r, eval = FALSE}
+# Params
 Vcmax <- 18
 Gstar <- 10 
 Ci <- 400
 
-Fparams <- c("alpha" = 0.8, "Jmax" = 1.67 * Vcmax, "Gstar" = Gstar, "Km" = Km, "Vcmax" = Vcmax)  
+Fparams <- c("alpha" = 0.8, "Jmax" = 1.67 * Vcmax, "Gstar" = Gstar, "Km" = Km,
+             "Vcmax" = Vcmax, "Rleaf" =  0.04 * Vcmax)  
 I <- inputs$PAR
 
-# The internals of the farquhar function 
 a <- 0.9 ## curvature parameter
-# - (quatum yeild * PAR + max electron transport rate (assumed to be some related to mac carboxylation rate))
-b <- -(Fparams[["alpha"]] * I + Fparams[["Jmax"]]) # weird that this is max + yeild then neative... 
-  
-ggplot(data = data.frame(par = I, b = b), aes(par, b)) + 
-  geom_point() + 
-  labs(title = "PAR vs b")
+b <- -(Fparams[["alpha"]] * I + Fparams[["Jmax"]])
+c <- Fparams[["alpha"]] * I * Fparams[["Jmax"]]
+J <- (-b -sqrt(b^2-4*a*c))/ (2*a)
+aJ_400 <- J*(Ci-Fparams[["Gstar"]])/(4*Ci+8*Fparams[["Gstar"]])    ## electron transport limited without covariates
+aC <- Fparams[["Vcmax"]]*(Ci-Fparams[["Gstar"]])/(Ci + Fparams[["Km"]])  
 
-ggplot(data = data.frame(time = inputs$time, b = b), aes(time, b)) + 
-  geom_point() + 
-  labs(title = "Time vs b")
+# okay so CO2 does range from 305.3 429.8 but they leave it alone in SEM so much be assumed to be constant
+# so will probably need to just leave it alone
 
-# this seems more along the lines of what I would expect, its yeild * par * max... although that
-# a product of all three.... 
-  c <- Fparams[["alpha"]] * I * Fparams[["Jmax"]]
-  
-  ggplot(data = data.frame(time = inputs$time, c = c), aes(time, c)) + 
-  geom_point() + 
-  labs(title = "Time vs c")
-  
-  J <- (-b -sqrt(b^2-4*a*c))/ (2*a)
-  
-  aJ <- J*(Ci-Fparams[["Gstar"]])/(4*Ci+8*Fparams[["Gstar"]])    ## electron transport limited without covariates
-  aC <- Fparams[["Vcmax"]]*(Ci-Fparams[["Gstar"]])/(Ci + Fparams[["Km"]])  
-  
-  
-xx <- data.frame(time = inputs$time, par = inputs$PAR, aJ, aC)
+df <- data.frame(time = inputs$time, 
+                 par = inputs$PAR, 
+                 aJ = aJ - Fparams[["Rleaf"]], 
+                 aC = aC -  Fparams[["Rleaf"]])
 
-ggplot(data = xx) + 
+ggplot(data = df) + 
   geom_line(aes(par, aJ)) + 
-  geom_line(aes(par, aC))
-  
-  
-  out <- min(aJ, aC) - Fparams[["Rleaf"]]
+  geom_line(aes(par, aC)) + 
+  labs(title = "Photosynthesis", 
+       y = "Photosynthesis", 
+       x = "PAR")
+
 ```
- 
+# Ballberry
 
-* this tells use we cannot adjust the temporal resolution to be more than an a 1 hour time step!
+This function dete
 
-"The Farquhar biochemical growth model (Farquhar et al., 1980) calculates photosynthesis as a function of demand and supply of CO2. The advantage with this model is that photosynthesis is regulated not only by radiation and transpiration, but also by air humidity, leaf temperature, CO2 availability and leaf nitrogen content, and the plant also experience radiation saturation at high levels of radiation. To function properly, driving variables need to be given as input to the simulation at least once an hour."^[http://www.coupmodel.com/WordDocuments/farquharapproach1.htm]
+# Hydrology 
 
+Patch hydrology occurs in two steps 
 
-Within the SEM model this is called as part of the ballberry function.... 
+* soil to atmosphere evaporation (environmental conditions)
+* plant water use (driven by photosynthesis) 
 
-farquhar(Ci = Ci, Fparams = Fparams, I = obs[["PAR"]]) = net photosynthesis given on CO2 or PAR limited conditions... 
-(farquhar(Ci = Ci, Fparams = Fparams, I = obs[["PAR"]]) - input[1])
 
 ```{r}
-#Jmax is also related to Vcmax! 
-# what is the differences betweeen obs and I? 
-Vcmax <- 18
-Gstar <- 10 
-Fparams <- c( 0.8, 1.67 * Vcmax, Gstar, 18, Vcmax*0.004, Km)
-names(Fparams) <- c("alpha", "Jmax", "Gstar", "Vcmax", "Rleaf", "Km")
-farquhar(Ci = 400, Fparams = Fparams, I = 10)
+# Conversion factors and constants 
+conversion_factor <- (1/1000) # kg/m2/s to m/s
+timestep <- 1800
+# Constants
+rho <- 1.15           # density of air, kg/m3 
+P <- 101.325          # average atm pressure (kPa)
+R <- 8.3144621        # ideal gas constant in J/K/mol
 
-
-
+EVAP = min(X[["soil_water"]]/timestep, rho * params$gevap * (0.622 * inputs[["VPD"]] / P) * conversion_factor)  
 ```
 
 
+
+```{r, eval = FALSE}
+gevap <- 0.005  
+rho *  gevap
+
+x <- (0.622 * inputs[["VPD"]] / P) * conversion_factor * rho
+range(inputs[["VPD"]] / P)
+
+
+```
 
